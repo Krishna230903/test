@@ -13,14 +13,17 @@ from nltk.sentiment.vader import SentimentIntensityAnalyzer
 from textblob import TextBlob
 import io
 
-# --- NLTK VADER Lexicon Download (Automated) ---
+# --- NLTK VADER Lexicon Download (Automated & Corrected) ---
 # This function checks for the VADER lexicon and downloads it if not found.
 def download_nltk_vader():
     try:
+        # Try to find the resource. If it doesn't exist, it raises a LookupError.
         nltk.data.find('sentiment/vader_lexicon.zip')
-    except nltk.downloader.DownloadError:
-        st.info("Downloading VADER lexicon for sentiment analysis (one-time setup).")
+    except LookupError: # Corrected exception
+        # If the resource is not found, download it.
+        st.info("Downloading VADER lexicon for sentiment analysis (one-time setup). This may take a moment...")
         nltk.download('vader_lexicon')
+
 # Call the function at the start of the app
 download_nltk_vader()
 
