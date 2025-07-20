@@ -1,8 +1,9 @@
-pandas
+streamlit 
+pandas 
 numpy
 yfinance
 plotly
-PyPortfolioOpt
-nltk
-TextBlob
-scikit-learn
+pandas_ta
+pypfopt
+nltk 
+textblob
