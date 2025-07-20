@@ -14,17 +14,13 @@ from textblob import TextBlob
 import io
 
 # --- NLTK VADER Lexicon Download (Automated & Corrected) ---
-# This function checks for the VADER lexicon and downloads it if not found.
 def download_nltk_vader():
     try:
-        # Try to find the resource. If it doesn't exist, it raises a LookupError.
         nltk.data.find('sentiment/vader_lexicon.zip')
-    except LookupError: # Corrected exception
-        # If the resource is not found, download it.
+    except LookupError:
         st.info("Downloading VADER lexicon for sentiment analysis (one-time setup). This may take a moment...")
         nltk.download('vader_lexicon')
 
-# Call the function at the start of the app
 download_nltk_vader()
 
 
@@ -32,7 +28,6 @@ download_nltk_vader()
 st.set_page_config(layout="wide", page_title="Ultimate Portfolio Analyzer 📈")
 
 # --- Session State Initialization ---
-# Initialize session state to store data persistently across reruns.
 if 'portfolio_holdings' not in st.session_state:
     st.session_state.portfolio_holdings = pd.DataFrame(columns=['Symbol', 'Shares', 'Current Price', 'Cost Basis', 'Market Value', 'Unrealized P&L', 'Unrealized P&L %'])
 if 'transactions' not in st.session_state:
@@ -40,7 +35,7 @@ if 'transactions' not in st.session_state:
 
 # --- Helper Functions ---
 
-@st.cache_data(ttl=3600) # Cache data for 1 hour
+@st.cache_data(ttl=3600)
 def fetch_stock_data(symbols, start_date, end_date):
     """
     Fetches historical stock data from yfinance, with enhanced error handling.
@@ -48,50 +43,41 @@ def fetch_stock_data(symbols, start_date, end_date):
     if not symbols:
         return pd.DataFrame()
     try:
-        data = yf.download(symbols, start=start_date, end=end_date, progress=False)
+        # Added auto_adjust=False to maintain consistent access to 'Adj Close'
+        data = yf.download(symbols, start=start_date, end=end_date, progress=False, auto_adjust=False)
 
         if data.empty:
-            # This case handles when no data is returned for any ticker.
             st.warning(f"No data fetched for symbols: {', '.join(symbols)}. They may be invalid or have no data.")
             return pd.DataFrame()
 
-        # For multiple symbols, yfinance returns a MultiIndex DataFrame.
         if isinstance(data.columns, pd.MultiIndex):
-            # We only want the 'Adj Close' data.
             adj_close = data.loc[:, 'Adj Close']
-            # Drop columns that are completely empty (for tickers that failed).
             adj_close = adj_close.dropna(axis=1, how='all')
-            # If after dropping, the dataframe is empty, it means all tickers failed.
             if adj_close.empty:
                  st.warning("Could not retrieve valid 'Adj Close' data for any of the symbols.")
                  return pd.DataFrame()
             return adj_close
 
-        # For a single successful symbol, it's a simple DataFrame.
         elif 'Adj Close' in data.columns:
             return data[['Adj Close']]
 
-        # If we get here, the data format is unexpected.
         else:
             st.error("Downloaded data is in an unexpected format and 'Adj Close' could not be found.")
             return pd.DataFrame()
 
     except Exception as e:
-        # This will catch any other network or unforeseen errors.
         st.error(f"An unexpected error occurred while fetching stock data: {e}")
         return pd.DataFrame()
 
 
-@st.cache_data(ttl=600) # Cache current price for 10 minutes
+@st.cache_data(ttl=600)
 def get_current_price(symbol):
     """Fetches the most recent market price for a stock symbol."""
     try:
         ticker = yf.Ticker(symbol)
-        # Use 'fast_info' for a quick, recent price
         price = ticker.fast_info.get('last_price')
         if price:
             return price
-        # Fallback to history if fast_info fails
         hist = ticker.history(period='1d')
         if not hist.empty:
             return hist['Close'].iloc[-1]
@@ -103,8 +89,7 @@ def get_current_price(symbol):
 
 def calculate_portfolio_metrics(transactions_df):
     """
-    Calculates current portfolio holdings, cost basis, market value, and P&L
-    based on a history of transactions.
+    Calculates current portfolio holdings, cost basis, market value, and P&L.
     """
     if transactions_df.empty:
         return pd.DataFrame(), 0, 0, 0, 0, 0
@@ -112,7 +97,6 @@ def calculate_portfolio_metrics(transactions_df):
     holdings_tracker = {}
     total_realized_pnl = 0
 
-    # Ensure transactions are sorted by date to process them chronologically
     transactions_df['Date'] = pd.to_datetime(transactions_df['Date'])
     transactions_df = transactions_df.sort_values(by='Date')
 
@@ -143,7 +127,7 @@ def calculate_portfolio_metrics(transactions_df):
     total_portfolio_cost_basis = 0
 
     for symbol, data in holdings_tracker.items():
-        if data['shares'] > 0.001: # Check for residual small share amounts
+        if data['shares'] > 0.001:
             current_price = get_current_price(symbol)
             if current_price:
                 market_value = data['shares'] * current_price
@@ -171,11 +155,9 @@ def module_portfolio_overview():
     st.header("Your Portfolio at a Glance")
     st.markdown("---")
     
-    # --- Data Input Section ---
     with st.expander("➕ Add or Upload Transactions", expanded=True):
         col1, col2 = st.columns([1,1])
 
-        # Manual Input
         with col1:
             st.subheader("Manually Add a Transaction")
             with st.form("transaction_form", clear_on_submit=True):
@@ -194,7 +176,6 @@ def module_portfolio_overview():
                     st.session_state.transactions = pd.concat([st.session_state.transactions, new_transaction], ignore_index=True)
                     st.success(f"Added {trans_type} of {trans_shares} shares of {trans_symbol}!")
 
-        # CSV Upload
         with col2:
             st.subheader("Upload Transaction History")
             st.info("CSV must have columns: `Date`, `Symbol`, `Type`, `Shares`, `Price`.")
@@ -214,10 +195,7 @@ def module_portfolio_overview():
 
     st.markdown("---")
 
-    # --- Performance Metrics & Holdings Display ---
     st.subheader("📈 Current Portfolio Performance")
-
-    # Recalculate portfolio metrics
     holdings_df, m_val, c_basis, un_pnl, un_pnl_pct, r_pnl = calculate_portfolio_metrics(st.session_state.transactions)
 
     if not holdings_df.empty:
@@ -232,7 +210,6 @@ def module_portfolio_overview():
             'Market Value': '${:,.2f}', 'Unrealized P&L': '${:,.2f}', 'Unrealized P&L %': '{:,.2f}%'
         }))
 
-        # --- Risk & Diversification Analysis ---
         st.subheader("🛡️ Risk & Diversification")
         symbols = holdings_df['Symbol'].tolist()
         
@@ -260,14 +237,14 @@ def module_portfolio_overview():
     else:
         st.info("Your portfolio is empty. Add transactions above to get started.")
 
-    # --- Transaction History Display ---
     with st.expander("📜 View or Clear Transaction History"):
         if not st.session_state.transactions.empty:
             st.dataframe(st.session_state.transactions.sort_values(by='Date', ascending=False).reset_index(drop=True))
             if st.button("🚨 Clear All Transactions", type="primary"):
                 st.session_state.transactions = pd.DataFrame(columns=['Date', 'Symbol', 'Type', 'Shares', 'Price', 'Total Amount'])
                 st.session_state.portfolio_holdings = pd.DataFrame(columns=['Symbol', 'Shares', 'Current Price', 'Cost Basis', 'Market Value', 'Unrealized P&L', 'Unrealized P&L %'])
-                st.experimental_rerun()
+                # Corrected from st.experimental_rerun()
+                st.rerun()
         else:
             st.write("No transactions recorded.")
 
@@ -395,7 +372,6 @@ def module_actionable_intelligence():
 
         latest_prices = holdings_df.set_index('Symbol')['Current Price']
         
-        # Ensure weights and prices only contain common, valid symbols before allocation
         valid_symbols = [s for s in cleaned_weights if s in latest_prices.index and latest_prices[s] > 0]
         filtered_weights = {s: cleaned_weights[s] for s in valid_symbols}
         filtered_prices = latest_prices[valid_symbols]
@@ -456,7 +432,6 @@ def main():
     st.markdown("Welcome to your personal investment strategist! Input your transactions and navigate the tabs below to analyze, optimize, and get actionable insights on your portfolio.")
     st.markdown("---")
 
-    # Define the tabs
     tab1, tab2, tab3, tab4 = st.tabs([
         "📊 Portfolio Overview", 
         "🔮 Predictive Modeling", 
@@ -466,13 +441,10 @@ def main():
 
     with tab1:
         module_portfolio_overview()
-
     with tab2:
         module_predictive_modeling()
-
     with tab3:
         module_actionable_intelligence()
-
     with tab4:
         module_market_sentiment()
 
