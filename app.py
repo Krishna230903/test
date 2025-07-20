@@ -42,24 +42,43 @@ if 'transactions' not in st.session_state:
 
 @st.cache_data(ttl=3600) # Cache data for 1 hour
 def fetch_stock_data(symbols, start_date, end_date):
-    """Fetches historical stock data from yfinance, handling potential errors."""
+    """
+    Fetches historical stock data from yfinance, with enhanced error handling.
+    """
     if not symbols:
         return pd.DataFrame()
     try:
         data = yf.download(symbols, start=start_date, end=end_date, progress=False)
+
         if data.empty:
-            st.warning(f"No data fetched for symbols: {', '.join(symbols)}. They may be invalid or have no data in the selected range.")
+            # This case handles when no data is returned for any ticker.
+            st.warning(f"No data fetched for symbols: {', '.join(symbols)}. They may be invalid or have no data.")
             return pd.DataFrame()
-        # Handle single vs. multiple symbols
+
+        # For multiple symbols, yfinance returns a MultiIndex DataFrame.
         if isinstance(data.columns, pd.MultiIndex):
-            adj_close = data['Adj Close']
-            # Drop columns that are all NaN (happens for invalid tickers in a group request)
+            # We only want the 'Adj Close' data.
+            adj_close = data.loc[:, 'Adj Close']
+            # Drop columns that are completely empty (for tickers that failed).
             adj_close = adj_close.dropna(axis=1, how='all')
+            # If after dropping, the dataframe is empty, it means all tickers failed.
+            if adj_close.empty:
+                 st.warning("Could not retrieve valid 'Adj Close' data for any of the symbols.")
+                 return pd.DataFrame()
             return adj_close
+
+        # For a single successful symbol, it's a simple DataFrame.
+        elif 'Adj Close' in data.columns:
+            return data[['Adj Close']]
+
+        # If we get here, the data format is unexpected.
         else:
-            return data[['Adj Close']] if 'Adj Close' in data.columns else pd.DataFrame()
+            st.error("Downloaded data is in an unexpected format and 'Adj Close' could not be found.")
+            return pd.DataFrame()
+
     except Exception as e:
-        st.error(f"An error occurred while fetching stock data: {e}")
+        # This will catch any other network or unforeseen errors.
+        st.error(f"An unexpected error occurred while fetching stock data: {e}")
         return pd.DataFrame()
 
 
