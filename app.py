@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-npNaN = np.nan
 import yfinance as yf
 import plotly.graph_objects as go
 import plotly.express as px
@@ -12,15 +11,13 @@ from pypfopt.discrete_allocation import DiscreteAllocation
 import nltk
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
 from textblob import TextBlob
-import io
-from datetime import datetime, timedelta
+from datetime import datetime
 
-# --- Initial Downloads ---
+# --- Ensure nltk vader lexicon is available ---
 def download_nltk_vader():
     try:
         nltk.data.find('sentiment/vader_lexicon.zip')
     except LookupError:
-        st.info("Downloading VADER lexicon for sentiment analysis...")
         nltk.download('vader_lexicon')
 
 download_nltk_vader()
@@ -117,6 +114,31 @@ def calculate_portfolio_metrics(transactions_df):
     st.session_state.portfolio_holdings = current_holdings_df
     return current_holdings_df, total_portfolio_market_value, total_portfolio_cost_basis, total_unrealized_pnl, total_unrealized_pnl_percent, total_realized_pnl
 
+@st.cache_data(ttl=1800)
+def calculate_additional_metrics(transactions_df, benchmark_symbol="^GSPC"):
+    if transactions_df.empty:
+        return None, None, None
+    symbols = transactions_df['Symbol'].unique().tolist()
+    if not symbols:
+        return None, None, None
+    end_date = pd.Timestamp.now()
+    start_date = end_date - pd.DateOffset(years=3)
+    prices = fetch_stock_data(symbols + [benchmark_symbol], start_date, end_date)
+    if prices.empty or benchmark_symbol not in prices.columns:
+        return None, None, None
+    returns = prices.pct_change().dropna()
+    port_returns = returns[symbols].mean(axis=1)
+    bench_returns = returns[benchmark_symbol]
+    if port_returns.std() == 0 or bench_returns.std() == 0:
+        return None, None, None
+    cov = np.cov(port_returns, bench_returns)[0, 1]
+    beta = cov / np.var(bench_returns)
+    alpha = (port_returns.mean() - bench_returns.mean() * beta) * 252
+    active_return = port_returns - bench_returns
+    tracking_error = np.std(active_return) * np.sqrt(252)
+    info_ratio = (port_returns.mean() - bench_returns.mean()) * 252 / tracking_error if tracking_error > 0 else None
+    return beta, alpha, info_ratio
+
 def fetch_fundamentals(symbol):
     try:
         ticker = yf.Ticker(symbol)
@@ -137,7 +159,6 @@ def fetch_fundamentals(symbol):
             'Industry': industry,
             'Key Executives': [o.get('name') for o in officers if 'name' in o][:3],
         }
-        # Condensed financials, take the first 4 columns for classic statements
         statements = {
             'Income Statement': ticker.financials.iloc[:, :4] if not ticker.financials.empty else None,
             'Balance Sheet': ticker.balance_sheet.iloc[:, :4] if not ticker.balance_sheet.empty else None,
@@ -148,7 +169,7 @@ def fetch_fundamentals(symbol):
         return {}, {}, {}
 
 def fetch_news(symbol, limit=5):
-    # Placeholder for news fetching (implement NewsAPI or scraping as needed)
+    # Placeholder: A real implementation might use a news API
     return [
         {"headline": f"Latest headline {i+1} for {symbol}", "source": "News Source"} for i in range(limit)
     ]
@@ -158,7 +179,7 @@ def analyze_headline_sentiment(headline):
     vs = analyzer.polarity_scores(headline)
     return vs['compound']
 
-# --- Modules ---
+# --- MODULES ---
 def module_portfolio_overview():
     st.header("Your Portfolio at a Glance")
     st.markdown("---")
@@ -182,7 +203,7 @@ def module_portfolio_overview():
                     st.success(f"Added {trans_type} of {trans_shares} shares of {trans_symbol}!")
         with col2:
             st.subheader("Upload Transaction History")
-            st.info("CSV must have columns: `Date`, `Symbol`, `Type`, `Shares`, `Price`.")
+            st.info("CSV must have columns: Date, Symbol, Type, Shares, Price.")
             uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
             if uploaded_file:
                 try:
@@ -212,7 +233,16 @@ def module_portfolio_overview():
             'Shares': '{:,.2f}', 'Current Price': '${:,.2f}', 'Cost Basis': '${:,.2f}',
             'Market Value': '${:,.2f}', 'Unrealized P&L': '${:,.2f}', 'Unrealized P&L %': '{:,.2f}%'
         }))
-        st.subheader("🛡️ Risk & Diversification")
+        st.subheader("📊 Advanced Portfolio Metrics (vs S&P500)")
+        beta, alpha, info_ratio = calculate_additional_metrics(st.session_state.transactions)
+        col_b, col_a, col_ir = st.columns(3)
+        if beta is not None:
+            col_b.metric("Portfolio Beta", f"{beta:.2f}", help="Risk relative to S&P 500")
+        if alpha is not None:
+            col_a.metric("Alpha (annualized)", f"{alpha:.2%}", help="Outperformance vs S&P 500")
+        if info_ratio is not None:
+            col_ir.metric("Information Ratio", f"{info_ratio:.2f}", help="Outperformance per unit of tracking error")
+        st.subheader("🛡 Risk & Diversification")
         symbols = holdings_df['Symbol'].tolist()
         col_corr, col_sector = st.columns(2)
         with col_corr:
@@ -257,16 +287,16 @@ def module_fundamental_analysis():
     st.subheader("Key Ratios")
     st.table(pd.DataFrame(ratios, index=["Value"]).T)
     st.subheader("Profile")
-    st.write(f"**Description:** {profile.get('Description', 'N/A')}")
-    st.write(f"**Sector/Industry:** {profile.get('Sector', '')} | {profile.get('Industry', '')}")
-    st.write(f"**Key Executives:** {', '.join(profile.get('Key Executives', []))}")
+    st.write(f"*Description:* {profile.get('Description', 'N/A')}")
+    st.write(f"*Sector/Industry:* {profile.get('Sector', '')} | {profile.get('Industry', '')}")
+    st.write(f"*Key Executives:* {', '.join(profile.get('Key Executives', []))}")
     st.subheader("Financial Statements (Last 4 Periods)")
     for name, df in statements.items():
         if df is not None:
-            st.write(f"**{name}:**")
+            st.write(f"{name}:")
             st.dataframe(df)
         else:
-            st.write(f"**{name}:** Not available.")
+            st.write(f"{name}:** Not available.")
 
 def module_technical_analysis():
     st.header("📊 Technical Analysis Toolkit")
@@ -326,12 +356,12 @@ def module_predictive_modeling():
         ret_min_vol, std_min_vol, _ = ef_min_vol.portfolio_performance()
         col1, col2 = st.columns(2)
         with col1:
-            st.write("**Optimal Portfolio (Max Sharpe Ratio):**")
+            st.write("*Optimal Portfolio (Max Sharpe Ratio):*")
             st.metric("Expected Annual Return", f"{ret_sharpe*100:.2f}%")
             st.metric("Annual Volatility (Risk)", f"{std_sharpe*100:.2f}%")
             st.json(ef.clean_weights())
         with col2:
-            st.write("**Optimal Portfolio (Minimum Volatility):**")
+            st.write("*Optimal Portfolio (Minimum Volatility):*")
             st.metric("Expected Annual Return", f"{ret_min_vol*100:.2f}%")
             st.metric("Annual Volatility (Risk)", f"{std_min_vol*100:.2f}%")
             st.json(ef_min_vol.clean_weights())
@@ -366,9 +396,9 @@ def module_predictive_modeling():
             fig_mc = px.histogram(x=all_final_values, nbins=75, title=f"Projected Portfolio Value Distribution over {num_days} Days")
             fig_mc.update_layout(xaxis_title="Projected Value ($)", yaxis_title="Frequency")
             st.plotly_chart(fig_mc, use_container_width=True)
-            st.write(f"**Initial Portfolio Value:** ${initial_value:,.2f}")
-            st.write(f"**95% Confidence Interval:** The portfolio is likely to end up between **${np.percentile(all_final_values, 5):,.2f}** and **${np.percentile(all_final_values, 95):,.2f}**.")
-            st.write(f"**Average Projected Value:** ${np.mean(all_final_values):,.2f}")
+            st.write(f"*Initial Portfolio Value:* ${initial_value:,.2f}")
+            st.write(f"*95% Confidence Interval:* The portfolio is likely to end up between *${np.percentile(all_final_values, 5):,.2f}* and *${np.percentile(all_final_values, 95):,.2f}*.")
+            st.write(f"*Average Projected Value:* ${np.mean(all_final_values):,.2f}")
         except np.linalg.LinAlgError:
             st.error("Monte Carlo simulation failed due to covariance matrix issue.")
         except Exception as e:
@@ -397,7 +427,7 @@ def module_advanced_risk():
     st.metric("Sharpe Ratio", f"{sharpe_ratio:.2f}")
     if sortino_ratio:
         st.metric("Sortino Ratio", f"{sortino_ratio:.2f}")
-    st.info('Higher Sharpe/Sortino is better (risk-adjusted performance). VaR/Drawdown measures downside risk.')
+    st.info('Higher Sharpe/Sortino is better (risk-adjusted performance). VaR/Drawdown measure downside risk.')
 
 def module_news_sentiment():
     st.header("📰 News & Sentiment")
@@ -417,7 +447,7 @@ def module_news_sentiment():
         if all_scores:
             pos = sum(1 for s in all_scores if s > 0.05)
             neg = sum(1 for s in all_scores if s < -0.05)
-            st.write(f"**News Sentiment:** {100*pos/len(all_scores):.1f}% positive, {100*neg/len(all_scores):.1f}% negative")
+            st.write(f"*News Sentiment:* {100*pos/len(all_scores):.1f}% positive, {100*neg/len(all_scores):.1f}% negative")
 
 def module_actionable_intelligence():
     st.header("💡 Rebalance Your Portfolio to Perfection")
@@ -448,18 +478,18 @@ def module_actionable_intelligence():
         da = DiscreteAllocation(filtered_weights, filtered_prices, total_portfolio_value=total_market_value)
         alloc, leftover = da.lp_portfolio()
         st.write("#### 📋 Discrete Allocation Plan (Exact Shares to Own)")
-        st.write(f"This plan shows the exact number of shares to own for optimality. Leftover cash: **${leftover:,.2f}**")
+        st.write(f"This plan shows the exact number of shares to own for optimality. Leftover cash: *${leftover:,.2f}*")
         target_shares_df = pd.DataFrame.from_dict(alloc, orient='index', columns=['Target Shares'])
         current_shares_df = holdings_df.set_index('Symbol')[['Shares']].rename(columns={'Shares': 'Current Shares'})
         rebalancing_df = current_shares_df.join(target_shares_df, how='outer').fillna(0)
         rebalancing_df['Trade Action (Shares)'] = rebalancing_df['Target Shares'] - rebalancing_df['Current Shares']
         st.dataframe(rebalancing_df.style.format('{:,.2f}'))
-        st.info("Positive 'Trade Action' means **BUY**. Negative means **SELL**.")
+        st.info("Positive 'Trade Action' means *BUY*. Negative means *SELL*.")
     except Exception as e:
         st.error(f"Error generating rebalancing plan: {e}")
 
 def module_scenario_analysis():
-    st.header("⚙️ 'What-If' Scenario Analysis")
+    st.header("⚙ 'What-If' Scenario Analysis")
     holdings_df = st.session_state.portfolio_holdings
     if holdings_df.empty:
         st.warning("Add holdings to use scenario analysis.")
@@ -485,14 +515,13 @@ def module_scenario_analysis():
                         'Cost Basis': 0, 'Market Value': price*shares, 'Unrealized P&L': 0, 'Unrealized P&L %': 0
                     }])
                     df_copy = pd.concat([df_copy, new], ignore_index=True)
-            st.write("**New Allocation:**")
+            st.write("*New Allocation:*")
             st.dataframe(df_copy)
     st.subheader("📉 Market Shock Simulator")
     percent = st.slider("Simulate a sector-wide drop (%)", -50, 0, -10)
     sector = st.text_input("Sector (e.g., Technology)")
     if st.button("Apply Market Shock"):
         df_copy = holdings_df.copy()
-        # For realism, use sector from the company profile, or all holdings if not implemented
         if sector:
             symbols = [s for s in df_copy['Symbol'] if fetch_fundamentals(s)[2].get("Sector", "").lower() == sector.lower()]
         else:
@@ -511,7 +540,7 @@ def module_personalization():
             watchlist.append(add.upper())
             st.success(f"Added {add.upper()} to watchlist.")
     if watchlist:
-        st.write("**Current Watchlist:**", ", ".join(watchlist))
+        st.write("*Current Watchlist:*", ", ".join(watchlist))
         to_remove = st.selectbox("Remove from watchlist", [""]+watchlist)
         if st.button("Remove Symbol"):
             if to_remove and to_remove in watchlist:
@@ -531,7 +560,7 @@ def main():
     st.markdown("---")
     tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
         "📊 Overview", "🔎 Fundamentals", "📊 Technicals", "🔮 Predictive",
-        "🧠 Risk", "📰 News", "💡 Actions", "⚙️ Scenarios & Goals"
+        "🧠 Risk", "📰 News", "💡 Actions", "⚙ Scenarios & Goals"
     ])
     with tab1:
         module_portfolio_overview()
