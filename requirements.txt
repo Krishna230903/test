@@ -1,11 +1,9 @@
 streamlit
 pandas
 numpy
-scipy
-cvxopt
-cvxpy
 yfinance
 plotly
 pandas-ta
 pypfopt
 nltk
+textblob
